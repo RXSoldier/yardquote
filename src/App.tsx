@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { PropertyMap } from './PropertyMap'
 import './App.css'
 
 function App() {
@@ -17,8 +18,11 @@ function App() {
       />
 
       <p>You typed: {address}</p>
+
+      <PropertyMap />
     </main>
   )
 }
 
 export default App
+
