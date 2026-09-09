@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/census/:path*",
+      "destination": "https://geocoding.geo.census.gov/:path*"
+    }
+  ]
+}

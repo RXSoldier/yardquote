@@ -38,7 +38,7 @@ function App() {
           type="text"
           value={address}
           onChange={(event) => setAddress(event.target.value)}
-          placeholder="123 Main St, City, State"
+          placeholder="123 Main St, City, ST 12345"
           aria-label="Property address"
         />
         <button type="submit" disabled={status === 'searching'}>
