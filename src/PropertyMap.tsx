@@ -1,6 +1,14 @@
 import { useEffect, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import {
+  TerraDraw,
+  TerraDrawPolygonMode,
+  TerraDrawSelectMode,
+  type GeoJSONStoreFeatures,
+} from 'terra-draw'
+import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
+import type { Polygon } from 'geojson'
 
 // Pre-cut, cached tiles. Fast, but the cache stops at zoom 16 —
 // good for finding the property, too coarse for tracing it.
@@ -18,21 +26,62 @@ const GEOCODER_ATTRIBUTION = '© OpenStreetMap contributors'
 
 const PROPERTY_ZOOM = 18
 
+// Shapes are drawn over aerial imagery, so they need a bright outline to be visible.
+const SHAPE_STYLE = {
+  fillColor: '#2e5a3b',
+  fillOpacity: 0.25,
+  outlineColor: '#ffd166',
+  outlineWidth: 2,
+  closingPointColor: '#ffd166',
+  closingPointWidth: 6,
+  closingPointOutlineColor: '#171e17',
+  closingPointOutlineWidth: 2,
+} as const
+
+const SELECTED_STYLE = {
+  selectedPolygonColor: '#2e5a3b',
+  selectedPolygonFillOpacity: 0.35,
+  selectedPolygonOutlineColor: '#b42318',
+  selectedPolygonOutlineWidth: 3,
+  selectionPointColor: '#ffffff',
+  selectionPointOutlineColor: '#b42318',
+  selectionPointWidth: 6,
+  selectionPointOutlineWidth: 2,
+  midPointColor: '#ffd166',
+  midPointOutlineColor: '#171e17',
+  midPointWidth: 4,
+  midPointOutlineWidth: 1,
+} as const
+
 type Props = {
   // Where to look. null until the user has searched for something.
   center: { lon: number; lat: number } | null
+  // Hands the drawing tool up to the parent so it can switch modes / clear.
+  onDrawReady: (draw: TerraDraw) => void
+  // Called with every finished polygon whenever anything is drawn, edited or deleted.
+  onShapesChange: (shapes: GeoJSONStoreFeatures<Polygon>[]) => void
 }
 
-export function PropertyMap({ center }: Props) {
+export function PropertyMap({ center, onDrawReady, onShapesChange }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<maplibregl.Map | null>(null)
   const marker = useRef<maplibregl.Marker | null>(null)
+  const draw = useRef<TerraDraw | null>(null)
 
-  // Runs once: build the map.
+  // The map is built once, but the parent may hand us new callback functions on
+  // every render. Keeping the latest ones in a ref lets the one-time setup below
+  // always call the current version without being rebuilt. (Refs are updated in
+  // an effect, never during render — React's linter insists, for good reason.)
+  const callbacks = useRef({ onDrawReady, onShapesChange })
+  useEffect(() => {
+    callbacks.current = { onDrawReady, onShapesChange }
+  }, [onDrawReady, onShapesChange])
+
+  // Runs once: build the map, then the drawing tool on top of it.
   useEffect(() => {
     if (map.current || !container.current) return
 
-    map.current = new maplibregl.Map({
+    const mapInstance = new maplibregl.Map({
       container: container.current,
       attributionControl: { customAttribution: GEOCODER_ATTRIBUTION },
       style: {
@@ -65,11 +114,52 @@ export function PropertyMap({ center }: Props) {
       center: [-98.5, 39.8], // middle of the US, until there's a search
       zoom: 4,
     })
+    map.current = mapInstance
 
-    map.current.addControl(new maplibregl.NavigationControl(), 'top-right')
+    mapInstance.addControl(new maplibregl.NavigationControl(), 'top-right')
+
+    // The drawing tool adds its own layers, so it has to wait for the map's style to load.
+    mapInstance.once('load', () => {
+      const drawInstance = new TerraDraw({
+        adapter: new TerraDrawMapLibreGLAdapter({ map: mapInstance }),
+        modes: [
+          new TerraDrawPolygonMode({ styles: SHAPE_STYLE }),
+          new TerraDrawSelectMode({
+            styles: SELECTED_STYLE,
+            flags: {
+              polygon: {
+                feature: {
+                  draggable: true,
+                  coordinates: { draggable: true, midpoints: true, deletable: true },
+                },
+              },
+            },
+          }),
+        ],
+      })
+
+      drawInstance.start()
+
+      // Fires on every create / edit / delete. The polygon currently being drawn
+      // is in the snapshot too, so we leave it out until it's finished.
+      drawInstance.on('change', () => {
+        const finished = drawInstance
+          .getSnapshot()
+          .filter(
+            (feature): feature is GeoJSONStoreFeatures<Polygon> =>
+              feature.geometry.type === 'Polygon' && !feature.properties.currentlyDrawing,
+          )
+        callbacks.current.onShapesChange(finished)
+      })
+
+      draw.current = drawInstance
+      callbacks.current.onDrawReady(drawInstance)
+    })
 
     return () => {
-      map.current?.remove()
+      draw.current?.stop()
+      draw.current = null
+      mapInstance.remove()
       map.current = null
     }
   }, [])
